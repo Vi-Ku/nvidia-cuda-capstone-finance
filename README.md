@@ -25,6 +25,19 @@ We utilize **Parallel Computing** to treat every potential market scenario as an
 3. **Payoff Calculation:** Each thread independently calculates the "Call Option Payoff" () for its specific path.
 4. **Reduction:** We aggregate the results to find the expected (mean) payoff and discount it to the present value.
 
+## 3. Advanced Features & Library Usage
+This project goes beyond basic kernels by integrating the **Thrust Library** to perform "Data-Parallel Primitives" directly on the GPU.
+
+### 🚀 **Features**
+1.  **Hybrid Architecture:** Combines custom `__global__` kernels (for complex GBM math) with `Thrust` algorithms (for data reduction).
+2.  **Zero-Copy Reduction:** Uses `thrust::reduce` to calculate the average option price entirely in GPU memory, avoiding the bottleneck of transferring 50MB+ of simulation data over the PCIe bus.
+3.  **Value at Risk (VaR):** Implements `thrust::sort` (Radix Sort) to order millions of outcomes and pinpoint the 95th percentile risk metric in milliseconds.
+4.  **NVTX Profiling:** Annotated with `nvtxRangePush/Pop` to visualize the interplay between Kernel execution, Thrust allocation, and Sorting phases in Nsight Systems.
+
+### 📚 **Libraries Used**
+* **cuRAND:** High-quality parallel pseudo-random number generation (XORWOW algorithm).
+* **Thrust:** C++ template library for CUDA. Used for `device_vector` memory management, `reduce` (Summation), and `sort` (Ranking).
+
 ## 4. Technical Implementation
 
 * **`src/kernels.cu`**: Contains the core GPU kernels.
