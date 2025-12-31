@@ -1,7 +1,10 @@
 /*
- * CUDA Financial Risk Engine (Safe Version)
- * * Implements Monte Carlo Option Pricing using Standard CUDA C++.
- * * Removes Thrust dependency to resolve GCC 11 / NVCC header conflicts.
+ * CUDA Financial Risk Engine (v2.0 - Fixed)
+ * Features:
+ * 1. Monte Carlo Option Pricing (GPU)
+ * 2. Greek Calculation (Delta for Hedging)
+ * 3. CPU vs GPU Benchmarking
+ * 4. CSV Data Export (Restored)
  */
 
 #include <iostream>
@@ -11,130 +14,156 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <random> // For CPU benchmark
 
 // CUDA & Libraries
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include "../include/common.h"
 
-// Forward Declaration of Kernels
+// Forward Declaration
 __global__ void initRNG(curandState *states, unsigned long long seed, int n);
-__global__ void monteCarloKernel(curandState *states, float *d_payoffs, 
+__global__ void monteCarloKernel(curandState *states, float *d_payoffs, float *d_deltas,
                                  float S0, float K, float r, float sigma, float T, int n);
 
-void printUsage(const char* progName) {
-    std::cout << "Usage: " << progName << " -n <simulations> -s <stock> -k <strike>\n";
+// --- CPU BENCHMARK IMPLEMENTATION ---
+void runCpuBenchmark(int N, float S0, float K, float r, float sigma, float T) {
+    std::cout << "[CPU] Starting sequential benchmark (Please wait...)\n";
+    std::default_random_engine generator;
+    std::normal_distribution<float> distribution(0.0f, 1.0f);
+
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    double sum_payoff = 0.0;
+    for (int i = 0; i < N; i++) {
+        float z = distribution(generator);
+        float S_T = S0 * expf((r - 0.5f * sigma * sigma) * T + sigma * sqrtf(T) * z);
+        float payoff = fmaxf(S_T - K, 0.0f);
+        sum_payoff += payoff;
+    }
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float, std::milli> duration = end - start;
+    
+    float price = exp(-r * T) * (sum_payoff / N);
+    std::cout << "[CPU] Result: $" << price << " | Time: " << duration.count() << " ms\n";
 }
 
 int main(int argc, char **argv) {
     // 1. Configuration
-    int N = 5000000;      // 5 Million simulations
-    float S0 = 100.0f;    // Stock Price
-    float K = 100.0f;     // Strike Price
-    float r = 0.05f;      // Risk-free Rate
-    float sigma = 0.2f;   // Volatility
-    float T = 1.0f;       // Time (1 Year)
+    int N = 5000000;
+    float S0 = 100.0f, K = 100.0f, r = 0.05f, sigma = 0.2f, T = 1.0f;
+    bool run_benchmark = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-n" && i + 1 < argc) N = std::stoi(argv[++i]);
         else if (arg == "-s" && i + 1 < argc) S0 = std::stof(argv[++i]);
         else if (arg == "-k" && i + 1 < argc) K = std::stof(argv[++i]);
+        else if (arg == "--bench") run_benchmark = true;
     }
 
     std::cout << "==========================================\n";
-    std::cout << "   CUDA FINANCIAL RISK ENGINE (Safe Mode)\n";
+    std::cout << "   CUDA FINANCIAL RISK ENGINE (v2.0)\n";
     std::cout << "==========================================\n";
     std::cout << "Simulations: " << N << "\n";
 
-    // 2. Memory Allocation
-    size_t bytes_payoffs = N * sizeof(float);
-    size_t bytes_states = N * sizeof(curandState);
-
-    float *h_payoffs = (float*)malloc(bytes_payoffs);
-    float *d_payoffs;
+    // 2. GPU Memory Allocation
+    size_t bytes = N * sizeof(float);
+    float *h_payoffs = (float*)malloc(bytes);
+    float *h_deltas  = (float*)malloc(bytes); 
+    
+    float *d_payoffs, *d_deltas;
     curandState *d_rngStates;
 
-    // Use NVTX for profiling
     nvtxRangePush("Allocation");
-    CHECK_CUDA(cudaMalloc(&d_payoffs, bytes_payoffs));
-    CHECK_CUDA(cudaMalloc(&d_rngStates, bytes_states));
+    CHECK_CUDA(cudaMalloc(&d_payoffs, bytes));
+    CHECK_CUDA(cudaMalloc(&d_deltas, bytes)); 
+    CHECK_CUDA(cudaMalloc(&d_rngStates, N * sizeof(curandState)));
     nvtxRangePop();
 
-    // 3. Initialization
+    // 3. GPU Initialization
     int blockSize = 256;
     int gridSize = (N + blockSize - 1) / blockSize;
 
-    std::cout << "[1/4] Initializing RNG... ";
-    std::cout.flush();
+    std::cout << "[GPU] Initializing RNG... \n";
     initRNG<<<gridSize, blockSize>>>(d_rngStates, 1234ULL, N);
     CHECK_CUDA(cudaDeviceSynchronize());
-    std::cout << "Done.\n";
 
-    // 4. Simulation
-    std::cout << "[2/4] Running Simulations... ";
-    std::cout.flush();
-    
+    // 4. GPU Simulation
+    std::cout << "[GPU] Running Monte Carlo... \n";
     nvtxRangePush("Monte Carlo Kernel");
     auto start = std::chrono::high_resolution_clock::now();
     
-    monteCarloKernel<<<gridSize, blockSize>>>(d_rngStates, d_payoffs, S0, K, r, sigma, T, N);
+    monteCarloKernel<<<gridSize, blockSize>>>(d_rngStates, d_payoffs, d_deltas, S0, K, r, sigma, T, N);
     CHECK_CUDA(cudaDeviceSynchronize());
     
     auto end = std::chrono::high_resolution_clock::now();
     nvtxRangePop();
-    std::cout << "Done.\n";
 
-    // 5. Data Retrieval
-    std::cout << "[3/4] Copying Data (Device -> Host)... ";
-    std::cout.flush();
-    CHECK_CUDA(cudaMemcpy(h_payoffs, d_payoffs, bytes_payoffs, cudaMemcpyDeviceToHost));
-    std::cout << "Done.\n";
+    std::cout << "[GPU] Copying Data... \n";
+    CHECK_CUDA(cudaMemcpy(h_payoffs, d_payoffs, bytes, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_deltas, d_deltas, bytes, cudaMemcpyDeviceToHost)); 
 
-    // 6. CPU Reduction & Analysis
-    // We do this on CPU to avoid the Thrust header conflict
-    std::cout << "[4/4] Analyzing Risk... ";
-    std::cout.flush();
+    // 5. Reduction & Analysis
+    double sum_payoff = 0.0;
+    double sum_delta = 0.0;
     
-    double sum = 0.0;
     for (int i = 0; i < N; i++) {
-        sum += h_payoffs[i];
+        sum_payoff += h_payoffs[i];
+        sum_delta += h_deltas[i];
     }
-    double mean_payoff = sum / N;
+    
+    double mean_payoff = sum_payoff / N;
+    double mean_delta  = sum_delta / N;
     double option_price = exp(-r * T) * mean_payoff;
-
-    // Sort on CPU for VaR (Standard C++ Sort)
+    
+    // Sort for VaR (Standard C++ Sort)
     std::sort(h_payoffs, h_payoffs + N);
-    int index_95 = (int)(N * 0.95);
-    float var_95 = h_payoffs[index_95];
-    std::cout << "Done.\n";
+    float var_95 = h_payoffs[(int)(N * 0.95)];
 
-    // 7. Reporting
     std::chrono::duration<float, std::milli> duration = end - start;
-    float milliseconds = duration.count();
-    float gpaths = (N / 1e9f) / (milliseconds / 1000.0f);
-
-    std::cout << "\n------------------------------------------\n";
+    
+    std::cout << "\n--- RESULTS ---\n";
     std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Fair Option Price:   $" << option_price << "\n";
-    std::cout << "95% Value at Risk:   $" << var_95 << "\n";
-    std::cout << "Calculation Time:    " << milliseconds << " ms\n";
-    std::cout << "Throughput:          " << gpaths << " GPaths/s\n";
-    std::cout << "------------------------------------------\n";
+    std::cout << "Option Price:      $" << option_price << "\n";
+    std::cout << "Hedging Delta:     " << mean_delta << " (Sensitivity to Stock Price)\n";
+    std::cout << "95% Value at Risk: $" << var_95 << "\n";
+    std::cout << "GPU Time:          " << duration.count() << " ms\n";
 
-    // 8. Output CSV
+    // 6. CPU Benchmark (Optional)
+    if (run_benchmark) {
+        std::cout << "\n";
+        runCpuBenchmark(N, S0, K, r, sigma, T);
+    }
+
+    // 7. Output CSV (RESTORED)
+    // We write the sorted tails to the CSV for visualization
     std::ofstream csv("data/risk_engine_results.csv");
-    csv << "SimulationID,SortedPayoff\n";
-    // Save tails
-    for(int i=0; i<1000; i++) csv << i << "," << h_payoffs[i] << "\n";
-    for(int i=0; i<1000; i++) csv << (N-1000+i) << "," << h_payoffs[N-1000+i] << "\n";
-    csv.close();
-    std::cout << "Log: Data written to data/risk_engine_results.csv\n";
+    if (csv.is_open()) {
+        csv << "SimulationID,SortedPayoff\n";
+        int limit = (N < 1000) ? N : 1000;
+        
+        // Write first 1000 (lowest)
+        for(int i=0; i<limit; i++) 
+            csv << i << "," << h_payoffs[i] << "\n";
+            
+        // Write last 1000 (highest)
+        for(int i=0; i<limit; i++) 
+            csv << (N-limit+i) << "," << h_payoffs[N-limit+i] << "\n";
+            
+        csv.close();
+        std::cout << "\n[IO] CSV Log saved to data/risk_engine_results.csv\n";
+    } else {
+        std::cerr << "\n[IO] Error: Unable to write to data/risk_engine_results.csv\n";
+    }
 
     // Cleanup
     cudaFree(d_payoffs);
+    cudaFree(d_deltas);
     cudaFree(d_rngStates);
     free(h_payoffs);
+    free(h_deltas);
 
     return 0;
 }
