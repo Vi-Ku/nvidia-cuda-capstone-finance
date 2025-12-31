@@ -1,77 +1,53 @@
-# nvidia-cuda-capstone-finance
-CUDA-Accelerated Monte Carlo Option Pricing
+# CUDA-Accelerated Monte Carlo Option Pricing & Risk Engine
 
 ## 1. Project Overview
+This project implements a high-performance **Monte Carlo Option Pricing Engine** using **Standard CUDA C++**. It leverages the massive parallelism of NVIDIA GPUs to simulate millions of potential future stock price paths using the **Geometric Brownian Motion (GBM)** model.
 
-This project implements a high-performance **Monte Carlo Option Pricing Engine** using **CUDA C++**. It leverages the massive parallelism of NVIDIA GPUs to simulate millions of potential future stock price paths using the **Geometric Brownian Motion (GBM)** model.
-
-By offloading the heavy statistical computations to the GPU, this application achieves a significant speedup compared to sequential CPU implementations, making it suitable for real-time financial risk analysis and derivative pricing.
+By offloading heavy statistical computations to the GPU, this application achieves a significant speedup (approx. 50x-100x) compared to sequential CPU implementations, making it suitable for real-time financial risk analysis.
 
 ## 2. Problem Statement
+In quantitative finance, determining the fair value and risk parameters of derivatives is computationally intensive.
+* **The Challenge:** Running 10 million simulations on a standard CPU is too slow for real-time trading desks.
+* **The Goal:** Calculate the fair price and the **Hedging Delta** (sensitivity) in milliseconds.
 
-In quantitative finance, determining the fair value of "European Call Options" is a computationally intensive task. The **Black-Scholes model** provides a closed-form solution, but complex derivatives often require numerical methods like Monte Carlo simulations.
+## 3. Features & Capabilities
+This project demonstrates professional GPU computing techniques without relying on high-level wrappers, ensuring maximum compatibility and performance control.
 
-To obtain a statistically significant "Confidence Interval" for the price, analysts must simulate **tens of millions** of random market scenarios.
+### 🚀 Financial Metrics
+1.  **European Call Pricing:** Uses GBM simulation to solve the Black-Scholes price.
+2.  **The "Greeks" (Delta):** Simultaneously calculates the **Option Delta** (hedge ratio) using the *Pathwise Derivative Estimator* method inside the kernel.
+3.  **Value at Risk (VaR):** Calculates the 95th percentile risk tail to estimate maximum probable loss.
 
-* **The Challenge:** Running 10 million simulations on a standard CPU is slow and inefficient for real-time trading desks.
-* **The Goal:** Calculate the fair price of an option and analyze the risk distribution (profit/loss) in milliseconds.
-
-## 3. Our Approach
-
-We utilize **Parallel Computing** to treat every potential market scenario as an independent thread.
-
-1. **Parallel Simulation:** We launch millions of CUDA threads. Each thread simulates a single "path" of the stock price over time `T`.
-2. **RNG on GPU:** We use the **NVIDIA cuRAND** library to generate high-quality pseudo-random numbers directly on the device, avoiding the bottleneck of transferring random numbers from Host to Device.
-3. **Payoff Calculation:** Each thread independently calculates the "Call Option Payoff" () for its specific path.
-4. **Reduction:** We aggregate the results to find the expected (mean) payoff and discount it to the present value.
-
-## 3. Advanced Features & Library Usage
-This project goes beyond basic kernels by integrating the **Thrust Library** to perform "Data-Parallel Primitives" directly on the GPU.
-
-### 🚀 **Features**
-1.  **Hybrid Architecture:** Combines custom `__global__` kernels (for complex GBM math) with `Thrust` algorithms (for data reduction).
-2.  **Zero-Copy Reduction:** Uses `thrust::reduce` to calculate the average option price entirely in GPU memory, avoiding the bottleneck of transferring 50MB+ of simulation data over the PCIe bus.
-3.  **Value at Risk (VaR):** Implements `thrust::sort` (Radix Sort) to order millions of outcomes and pinpoint the 95th percentile risk metric in milliseconds.
-4.  **NVTX Profiling:** Annotated with `nvtxRangePush/Pop` to visualize the interplay between Kernel execution, Thrust allocation, and Sorting phases in Nsight Systems.
-
-### 📚 **Libraries Used**
-* **cuRAND:** High-quality parallel pseudo-random number generation (XORWOW algorithm).
-* **Thrust:** C++ template library for CUDA. Used for `device_vector` memory management, `reduce` (Summation), and `sort` (Ranking).
+### ⚡ Performance Features
+1.  **GPU vs CPU Benchmark:** Includes a built-in `--bench` mode to empirically demonstrate the speedup of the GPU implementation.
+2.  **cuRAND Integration:** Uses on-device random number generation (XORWOW) to avoid Host-to-Device memory bottlenecks.
+3.  **NVTX Profiling:** Code is instrumented with **NVIDIA Tools Extension** markers, allowing developers to visualize "Initialization" vs "Computation" phases in Nsight Systems.
+4.  **Multi-Scenario Analysis:** The automation script runs Neutral, Bull, and Bear market scenarios to validate the model's predictive behavior.
 
 ## 4. Technical Implementation
 
-* **`src/kernels.cu`**: Contains the core GPU kernels.
-* `initRNG`: Initializes the `curandState` for each thread.
-* `monteCarloKernel`: Performs the GBM path simulation and payoff calculation.
+### Key Files
+* **`src/kernels.cu`**:
+    * `initRNG`: Initializes `curandState` with unique seeds per thread to ensure statistical independence.
+    * `monteCarloKernel`: Simulates the stock path, calculates the Payoff, and computes the Delta sensitivity for each path.
+* **`src/main.cu`**:
+    * Orchestrates memory management (using standard `cudaMalloc`).
+    * Performs data reduction and sorting.
+    * Includes a reference CPU implementation for benchmarking.
+* **`data/plot_results.py`**: A Python script that visualizes the risk profile (histogram of outcomes) using `matplotlib`.
 
+### Libraries Used
+* **CUDA Runtime API:** For raw memory management and kernel launches.
+* **cuRAND:** For parallel random number generation.
+* **NVTX:** For performance profiling.
 
-* **`include/common.h`**: Defines standard error-checking macros (`CHECK_CUDA`) and NVTX profiling markers.
-* **`data/plot_distribution.py`**: A Python script that visualizes the risk profile (histogram of outcomes) using `matplotlib`.
-* **Profiling**: The application uses **NVTX (NVIDIA Tools Extension)** ranges, allowing developers to visualize the "Initialization" vs. "Computation" phases in NVIDIA Nsight Systems.
-
-## 5. Dependencies
-
-To build and run this project, you need:
-
-* **NVIDIA CUDA Toolkit** (11.0 or higher)
-* Must have `nvcc` in your PATH.
-* Links against `libcurand` and `libnvToolsExt`.
-
-
-* **Make** (for building the project)
-* **Python 3** (for visualization)
-* Required libraries: `pandas`, `matplotlib`
-* Install via: `pip install pandas matplotlib`
-
-
-
-## 6. Directory Structure
+## 5. Directory Structure
 
 ```
+
 cuda-monte-carlo-pricing/
-├── bin/            # Compiled executable (option_pricer)
+├── bin/            # Compiled executable (risk_engine)
 ├── data/           # Output CSV logs and PNG plots
-├── docs/           # Project documentation
 ├── include/        # Header files (common.h)
 ├── src/            # Source code (.cu files)
 ├── Makefile        # Build script
@@ -80,12 +56,16 @@ cuda-monte-carlo-pricing/
 
 ```
 
+## 6. Dependencies
+To build and run this project, you need:
+* **NVIDIA CUDA Toolkit** (11.0 or higher)
+* **Make**
+* **Python 3** (Required libraries: `pandas`, `matplotlib`)
+
 ## 7. How to Use
 
 ### Compilation
-
 Navigate to the root directory and run `make`. This will compile the source code and place the executable in the `bin/` folder.
-
 ```bash
 make
 
@@ -93,20 +73,19 @@ make
 
 ### Execution
 
-You can run the pricer manually with custom financial parameters:
+You can run the engine manually with custom financial parameters:
 
 ```bash
-./bin/option_pricer -n <simulations> -s <stock_price> -k <strike_price>
+./bin/risk_engine -n <simulations> -s <stock_price> -k <strike_price>
 
 ```
 
-* `-n`: Number of paths to simulate (e.g., 1000000)
-* `-s`: Initial Stock Price ()
-* `-k`: Strike Price ()
+* `-n`: Number of paths to simulate (e.g., 5000000)
+* `--bench`: (Optional) Run a CPU comparison test.
 
-### Automated Run (Recommended)
+### Automated Test Suite (Recommended)
 
-Use the provided shell script to build, run both Small and Large scale tests, and generate the visualization automatically:
+Use the provided shell script to build, run validation tests, and generate visualizations for three market scenarios (Neutral, Bull, Bear):
 
 ```bash
 ./run.sh
@@ -114,10 +93,32 @@ Use the provided shell script to build, run both Small and Large scale tests, an
 ```
 
 ## 8. Proof of Execution
+The automated script generates risk profiles for three distinct market scenarios. These histograms visualize the probability distribution of the option's payoff.
 
-After running the project, check the `data/` folder for artifacts:
+### Scenario 1: Neutral Market (At-The-Money)
+*Stock Price $100 vs Strike $100*
+![Neutral Risk Profile](data/plot_neutral.png)
+*Observation: A standard distribution curve starting near 0, representing moderate risk/reward.*
 
-1. **`simulation_results.csv`**: A log of the payoff calculated for the first 1,000 paths.
-2. **`risk_profile.png`**: A histogram showing the probability distribution of profitable outcomes, generated by the Python script.
+### Scenario 2: Bull Market (In-The-Money)
+*Stock Price $120 vs Strike $100*
+![Bull Risk Profile](data/plot_bull.png)
+*Observation: The curve is shifted significantly to the right, indicating a high probability of profit (High Delta).*
 
-This visual output demonstrates that the simulation followed a Lognormal distribution as expected by financial theory.
+### Scenario 3: Bear Market (Out-Of-The-Money)
+*Stock Price $80 vs Strike $100*
+![Bear Risk Profile](data/plot_bear.png)
+*Observation: The distribution is heavily skewed to 0. Most options expire worthless, behaving like a "lottery ticket" (Low Delta).*
+
+### Performance Benchmark (Terminal Output)
+The following screenshot demonstrates the execution of the engine, showing the calculated financial metrics (Price, Delta, VaR) and the **CPU vs. GPU Benchmark**:
+
+![Terminal Output & Benchmark](data/results.png)
+
+*Typical Speedup observed: ~80x faster on GPU.*
+Typical performance on a standard GPU environment:
+
+```text
+[GPU] Time: 50 ms
+[CPU] Time: 4100 ms
+Speedup: ~82x
