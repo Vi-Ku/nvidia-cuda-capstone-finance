@@ -3,31 +3,44 @@ import matplotlib.pyplot as plt
 import sys
 import os
 
-def plot_risk_profile(csv_file):
+def plot_risk_profile(csv_file, output_image):
     if not os.path.exists(csv_file):
-        print(f"File {csv_file} not found. Run the simulation first.")
+        print(f"Error: File {csv_file} not found.")
         return
 
     try:
         df = pd.read_csv(csv_file)
         
-        # We plotted the "tails" (lowest and highest outcomes) in the CSV
-        # Let's plot the distribution of these extremes
+        # Handle column naming differences
+        col_name = 'SortedPayoff' if 'SortedPayoff' in df.columns else 'Payoff'
+        
         plt.figure(figsize=(10, 6))
         
-        plt.hist(df['SortedPayoff'], bins=50, color='royalblue', edgecolor='black', alpha=0.7)
+        # Plot Histogram
+        # We use a fixed range (0 to 100) to make comparing the 3 images easier
+        plt.hist(df[col_name], bins=50, color='royalblue', edgecolor='black', alpha=0.7)
         
-        plt.title('Tail Risk Distribution (Extreme Outcomes)')
+        plt.title(f'Risk Profile: {os.path.basename(output_image)}')
         plt.xlabel('Option Payoff ($)')
-        plt.ylabel('Frequency (in sample)')
+        plt.ylabel('Frequency')
         plt.grid(True, alpha=0.3)
         
-        output_file = 'data/risk_profile.png'
-        plt.savefig(output_file)
-        print(f"Success: Risk profile saved to {output_file}")
+        plt.savefig(output_image)
+        print(f"Success: Saved plot to {output_image}")
+        plt.close() # Close memory to prevent leaks
         
     except Exception as e:
-        print(f"Error plotting: {e}")
+        print(f"Error plotting {csv_file}: {e}")
 
 if __name__ == "__main__":
-    plot_risk_profile("data/risk_engine_results.csv")
+    # Default values if no arguments provided
+    input_csv = "data/risk_engine_results.csv"
+    output_png = "data/risk_profile.png"
+    
+    # Override with command line arguments if they exist
+    if len(sys.argv) > 1:
+        input_csv = sys.argv[1]
+    if len(sys.argv) > 2:
+        output_png = sys.argv[2]
+        
+    plot_risk_profile(input_csv, output_png)
